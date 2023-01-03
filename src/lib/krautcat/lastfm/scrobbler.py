@@ -248,8 +248,8 @@ def scrobble(scrobbling_file: pathlib.Path, config_file: pathlib.Path,
             password = password_config
             break
 
-    API_KEY = "b9cb047abc894c445999900d40ab0f37"
-    API_SECRET = "95f53a50c42025faf59269fe95502f5b"
+    API_KEY = "b4dee23dca93e13434b8f0fda47c20a4"
+    API_SECRET = "e9201a666af7871ec5e27602d37edc60"
 
     network = pylast.LastFMNetwork(api_key=API_KEY, api_secret=API_SECRET, username=username, password_hash=password)
     network.scrobble_many(scrobbling_entries.entries)
