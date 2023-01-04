@@ -288,7 +288,10 @@ def parse_args(args: List[str]) -> argparse.Namespace:
     return argparser.parse_args(args[1:])
 
 
-def main(args: List[str]) -> int:
+def main(args: Optional[List[str]] = None) -> int:
+    if args is None:
+        args = sys.argv
+
     config_file = pathlib.Path.home() / ".config" / "krautcat" / "scrobbler.yaml" 
     ns = parse_args(args) 
 
