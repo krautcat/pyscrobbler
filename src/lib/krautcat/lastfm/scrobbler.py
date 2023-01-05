@@ -34,17 +34,22 @@ class FileDoesntExistError(Exception):
         self.filepath = filepath
 
 
+class CommandNotImplementedError(Exception):
+    def __init__(self, command: str) -> None:
+        self.command = commandj
+
+
 class ScrobblingEntries:
     def __init__(self, scrobbling_log_path: pathlib.Path) -> None:
         self.entries = []
 
         with scrobbling_log_path.open() as tsv:
             line = 0
-          
+
             for str_line in csv.reader(tsv, dialect="excel-tab"):
                 line += 1
 
-                # Skip 4 first lines. 
+                # Skip 4 first lines.
                 if line < 4:
                     continue
 
@@ -54,7 +59,7 @@ class ScrobblingEntries:
                 track_number = str_line[3]
                 duration = int(str_line[4])
 
-                unix_timestamp = str_line[6]       
+                unix_timestamp = str_line[6]
                 unix_timestamp = datetime.datetime.fromtimestamp(int(unix_timestamp))
                 local_tz = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo
                 unix_timestamp = unix_timestamp.replace(tzinfo=local_tz).astimezone(tz=datetime.timezone.utc)
@@ -62,7 +67,7 @@ class ScrobblingEntries:
                 if str_line[5] == "S":
                     logging.debug(f"Skipped track '{artist} — {track_name}' from album '{album}' at {unix_timestamp}")
                     continue
-                  
+
                 self.entries.append({"artist": artist,
                                      "album": album,
                                      "title": track_name,
@@ -155,7 +160,7 @@ class Credentials:
                 "password_hash": password_hash
             })
         if len(structure["users"]) == 0:
-            del structure["users"]    
+            del structure["users"]
 
         if self.default_username is not None:
             structure["common"]["default_username"] = self.default_username
@@ -165,7 +170,7 @@ class Credentials:
         if len(structure) > 0:
             yaml.dump(structure, filepath.open("w"))
         else:
-            filepath.open("w").close() 
+            filepath.open("w").close()
 
     def add_credentials(self, username: str, password: str):
         if not is_md5(password):
@@ -182,7 +187,7 @@ class Credentials:
 
         self._save_file(filepath)
 
- 
+
 class UI:
     def __init__(self) -> None:
         pass
@@ -190,28 +195,89 @@ class UI:
     def add_username(self, username: str,
                      config_file: pathlib.Path) -> None:
         password = getpass.getpass(f"Last.fm password for {username}: ")
-       
+
         if not config_file.exists():
             config_file.parent.mkdir()
-            config_file.touch() 
- 
+            config_file.touch()
+
         with Credentials(config_file) as credentials:
             credentials[username] = pylast.md5(password)
 
-    def edit_username(self, username: str, credentials: Credentials) -> int:
-        if username not in credentials:
-            print(f"Username '{username}' doesn't exist")
-            return 5
- 
-        password = getpass.getpass(f"Last.fm password for {username}: ")
-        credentials[username] = password
+        return 0
+
+    def edit_username(self, username: str, config_file: pathlib.Path) -> int:
+        with Credentials(config_file) as credentials:
+            if username not in credentials:
+                print(f"Username '{username}' doesn't exist")
+                return 5
+
+            password = getpass.getpass(f"Last.fm password for {username}: ")
+            credentials[username] = password
+
+        return 0
+
+
+class Commands:
+    def __init__(self, subcommand: List[str], config_file: pathlib.Path) -> None:
+        self.cli_subcommand = subcommand
+        for i in range(len(subcommand)):
+            subcommand[i] = subcommand[i].replace("-", "_")
+        self.subcommand_str = "_".join(subcommand)
+
+        self.config_file = config_file
+
+    def __call__(self, ns: argparse.Namespace) -> int:
+        method = getattr(self, "call_" + self.subcommand_str, None)
+        if method is None:
+            raise CommandNotImplementedError(" ".join(self.cli_subcommand))
+
+        return method(ns)
+
+    def call_scrobble(self, ns: argparse.Namespace) -> int:
+        return(scrobble(ns.file, self.config_file, recalculate_time=ns.recalculate,
+                        username=ns.username))
+
+    def call_creds_list(self, ns: argparse.Namespace) -> int:
+        with Credentials(self.config_file) as credentials:
+            for username in credentials.usernames():
+                print(f"{username}")
+
+        return 0
+
+    def call_creds_edit(self, ns: argparse.Namespace) -> int:
+        ui = UI()
+
+        return ui.edit_username(ns.username, self.config_file)
+
+    def call_creds_add(self, ns: argparse.Namespace) -> int:
+        ui = UI()
+
+        return ui.add_username(ns.username, self.config_file)
+
+    def call_creds_del(self, ns: argparse.Namespace) -> int:
+        with Credentials(self.config_file) as credentials:
+            try:
+                del credentials[ns.username]
+            except UsernameError as exc:
+                print(f"Username '{exc.username}' doesn't exist. Exit...")
+                return 5
+
+        return 0
+
+    def call_creds_set_default_username(self, ns: argparse.Namespace) -> int:
+        with Credentials(self.config_file) as credentials:
+            if ns.username in credentials:
+                credentials.default_username = ns.username
+            else:
+                print(f"Username '{ns.username}' doesn't exist in credentials file. Exit...", file=sys.stderr)
+                return 5
 
         return 0
 
 
 def is_md5(datastring: str) -> bool:
     result = re.findall(r"([a-fA-F\d]{32})", datastring)
-    if len(result) > 0 and result[0] == datastring: 
+    if len(result) > 0 and result[0] == datastring:
         return True
     else:
         return False
@@ -236,12 +302,12 @@ def scrobble(scrobbling_file: pathlib.Path, config_file: pathlib.Path,
     elif username is None and len(credentials) > 1:
         if credentials.default_username is None:
             print("More than one username in config file. Choose one. Exit... ", file=sys.stderr)
-            return 5
+            return 6
         else:
             username = credentials.default_username
     elif username is None and len(credentials) == 0:
         print("No usernames in config File. Exit...", file=sys.stderr)
-        return 5
+        return 4
     else:
         for username_config, password_config in credentials.items():
             username = username_config
@@ -256,19 +322,15 @@ def scrobble(scrobbling_file: pathlib.Path, config_file: pathlib.Path,
 
     return 0
 
-#  homedir = os.path.expanduser("~")
-#  credsfile = '{}/.config/pyapplier/saved_creds'.format(homedir)
 
-
-
-def parse_args(args: List[str]) -> argparse.Namespace:
+def create_argparser() -> argparse.ArgumentParser:
     argparser = argparse.ArgumentParser()
 
     subcommands = argparser.add_subparsers(help="Subcommands", dest="subcommand")
-    
+
     subcommand_creds = subcommands.add_parser("creds")
     subcommand_scrobble = subcommands.add_parser("scrobble")
-    
+
     subcommand_creds_subparsers = subcommand_creds.add_subparsers(help="Creds subcommands",
                                                                   dest="subcommand_creds")
     subcommand_creds_list = subcommand_creds_subparsers.add_parser("list")
@@ -282,46 +344,28 @@ def parse_args(args: List[str]) -> argparse.Namespace:
     subcommand_creds_del.add_argument("username")
 
     subcommand_scrobble.add_argument("-f", "--file", required=True, type=pathlib.Path)
-    subcommand_scrobble.add_argument("-r", "--recalculate", required=False, action="store")   
-    subcommand_scrobble.add_argument("-u", "--username", required=False, action="store")   
- 
-    return argparser.parse_args(args[1:])
+    subcommand_scrobble.add_argument("-r", "--recalculate", required=False, action="store")
+    subcommand_scrobble.add_argument("-u", "--username", required=False, action="store")
+
+    return argparser
 
 
 def main(args: Optional[List[str]] = None) -> int:
     if args is None:
         args = sys.argv
 
-    config_file = pathlib.Path.home() / ".config" / "krautcat" / "scrobbler.yaml" 
-    ns = parse_args(args) 
+    config_file = pathlib.Path.home() / ".config" / "krautcat" / "scrobbler.yaml"
+    argparser = create_argparser()
+    ns = argparser.parse_args(args[1:])
 
-    ui = UI()
+    if ns.subcommand is None:
+        argparser.print_help()
+        return 3
 
-    if ns.subcommand == "scrobble":
-        return(scrobble(ns.file, config_file, recalculate_time=ns.recalculate,
-                        username=username))
-        
+    command = [ns.subcommand]
     if ns.subcommand == "creds":
-        if ns.subcommand_creds == "list":
-            with Credentials(config_file) as credentials:
-                for username in credentials.usernames():
-                    print(f"{username}")
-        elif ns.subcommand_creds == "edit":
-            with Credentials(config_file) as credentials:
-                return ui.edit_username(ns.username, credentials)         
-        elif ns.subcommand_creds == "add":
-            ui.add_username(ns.username, config_file)
-        elif ns.subcommand_creds == "del":
-            with Credentials(config_file) as credentials:
-                del credentials[ns.username]
-        elif ns.subcommand_creds == "set-default-username":
-            with Credentials(config_file) as credentials:
-                if ns.username in credentials:
-                    credentials.default_username = ns.username
-                else:
-                    print(f"Username '{ns.username}' doesn't exist in credentials file. Exit...", file=sys.stderr)
-                    return 5
- 
+        command.append(ns.subcommand_creds)
+    return Commands(command, config_file)(ns)
 
 if __name__ == "__main__":
     exit(main(sys.argv))
